@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Post-it Playground</title>
+<style>
+  :root {
+    --note-bg:#fff88b;
+    --tool-bg:rgba(255,255,255,.85);
+    --tool-border:rgba(0,0,0,.08);
+    --toast-bg:rgba(30,30,30,.92);
+    --toast-fg:#fff;
+    --sel:#3b82f6;
+  }
+
+  html,body{height:100%;margin:0;}
+  body{
+    background:#fff;
+    font-family:Helvetica,Arial,-apple-system,BlinkMacSystemFont,sans-serif;
+    overflow:hidden;
+  }
+
+  #stage{position:fixed;inset:0;cursor:crosshair;}
+
+  /* ---- Note ---- */
+  .note{
+    position:absolute;
+    background:var(--note-bg);
+    width:180px;min-height:150px;
+    border:1px solid #e2e2e2;
+    box-shadow:0 6px 18px rgba(0,0,0,.18);
+    border-radius:6px;
+    overflow:hidden;
+    font-size:14px;line-height:1.35;
+    transform-origin:center;
+    animation:pop .26s cubic-bezier(.2,.8,.2,1);
+    box-sizing:border-box; /* <-- stabilize width/height math */
+  }
+  .note.selected{outline:2px solid var(--sel);}
+  .note:focus-within{outline:2px solid rgba(255,213,79,.9);}
+
+  /* Transparent move handle (grip shows on hover; always visible when selected) */
+  .note-header{
+    height:14px;
+    position:relative;
+    cursor:move;
+    user-select:none;
+    background:transparent;
+  }
+  .note-header::after{
+    content:'⋮⋮';
+    position:absolute;
+    left:50%; top:50%;
+    transform:translate(-50%,-50%) rotate(90deg);
+    font-size:16px;
+    font-weight:900;
+    line-height:1;
+    color:rgba(0,0,0,.75);
+    opacity:0;
+    filter:drop-shadow(0 0 1px rgba(0,0,0,.35));
+    transition:opacity .15s ease;
+    pointer-events:none;
+  }
+  .note-header:hover::after{ opacity:.95; }
+  .note.selected .note-header::after{ opacity:.95; }
+
+  /* Content (single-click to edit; drag selects text) */
+  .note-content{
+    padding:10px 12px 16px 12px;
+    min-height:110px;
+    outline:none;
+    white-space:pre-wrap;
+    word-wrap:break-word;
+    word-break:break-word;
+  }
+
+  @keyframes pop{
+    0%{transform:scale(.8) translateY(6px);opacity:0;}
+    60%{transform:scale(1.05);opacity:1;}
+    100%{transform:scale(1);}
+  }
+
+  /* Marquee */
+  #marquee{
+    position:fixed;left:0;top:0;width:0;height:0;
+    border:2px dashed var(--sel);
+    background:rgba(59,130,246,0.1);
+    display:none;pointer-events:none;z-index:9998;
+  }
+
+  /* Resize handle — hidden until near-corner hover; always visible when selected */
+  .resize-handle{
+    position:absolute;right:6px;bottom:6px;
+    width:10px;height:10px;
+    border-right:2px solid rgba(0,0,0,.55);
+    border-bottom:2px solid rgba(0,0,0,.55);
+    cursor:se-resize;
+    opacity:0;
+    transition:opacity .12s ease;
+    pointer-events:auto;
+    box-sizing:border-box;
+  }
+  .resize-handle:hover{ opacity:0.95; }
+  .note.show-resize .resize-handle{ opacity:0.9; }
+  .note.selected .resize-handle{ opacity:0.9; }
+
+  /* Toolbox */
+  .toolbox{
+    position:fixed;left:50%;bottom:18px;transform:translateX(-50%);
+    background:var(--tool-bg);
+    backdrop-filter:blur(8px);
+    border:1px solid var(--tool-border);
+    border-radius:14px;
+    box-shadow:0 10px 24px rgba(0,0,0,.12);
+    padding:8px 10px;
+    display:flex;gap:12px;align-items:center;
+    z-index:9999;
+  }
+
+  /* Unified 40x40 shape */
+  .tool-btn, .tool-btn.icon, .tool-btn.kbtn {
+    width:40px;height:40px;
+    border:1px solid var(--tool-border);
+    background:#fff;border-radius:10px;
+    padding:0;display:grid;place-items:center;
+    cursor:pointer;opacity:.85;transition:opacity .2s ease, transform .06s ease;
+  }
+  .tool-btn:hover, .tool-btn.icon:hover, .tool-btn.kbtn:hover { opacity:1; }
+  .tool-btn:active, .tool-btn.icon:active, .tool-btn.kbtn:active { transform:translateY(1px); }
+
+  /* A-/A+ text */
+  .tool-btn.kbtn span{
+    font-weight:700;
+    font-size:17px;
+    letter-spacing:0.2px;
+    user-select:none;
+    line-height:1;
+  }
+
+  /* PNG icons (original colors) */
+  .tool-btn.icon img{
+    width:22px;height:22px;
+    object-fit:contain;pointer-events:none;
+  }
+
+  .swatch{width:24px;height:24px;border-radius:8px;border:1px solid rgba(0,0,0,.12);cursor:pointer;}
+  .swatch.selected{outline:2px solid #000;outline-offset:1px;}
+  .sep{width:1px;height:28px;background:var(--tool-border);}
+
+  /* Toast */
+  .toast{
+    position:fixed;left:50%;bottom:96px;transform:translateX(-50%);
+    background:var(--toast-bg);color:var(--toast-fg);
+    border-radius:10px;padding:10px 12px;
+    display:flex;align-items:center;gap:12px;
+    z-index:10000;box-shadow:0 10px 24px rgba(0,0,0,.24);
+    font-size:14px;opacity:0;pointer-events:none;transition:opacity .18s ease;
+  }
+  .toast.show{opacity:.9;pointer-events:auto;}
+  .toast button{background:transparent;color:#8bd3ff;border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:6px 10px;cursor:pointer;}
+</style>
+</head>
+<body>
+
+<div id="stage"></div>
+<div id="marquee"></div>
+
+<div class="toolbox" id="toolbox">
+  <button class="tool-btn kbtn" id="smaller" title="Smaller font"><span>A−</span></button>
+  <button class="tool-btn kbtn" id="larger"  title="Larger font"><span>A+</span></button>
+
+  <div class="sep"></div>
+  <button class="swatch" data-color="#fff88b" style="background:#fff88b"></button>
+  <button class="swatch" data-color="#ffd3e0" style="background:#ffd3e0"></button>
+  <button class="swatch" data-color="#d7f0ff" style="background:#d7f0ff"></button>
+  <button class="swatch" data-color="#dbffd7" style="background:#dbffd7"></button>
+  <div class="sep"></div>
+
+  <!-- Export (left), Delete (right) -->
+  <button class="tool-btn icon" id="export" title="Export text only">
+    <img src="Group 11.png" alt="export" />
+  </button>
+  <button class="tool-btn icon" id="trash" title="Delete (⌘Z undo)">
+    <img src="Group 10.png" alt="delete" />
+  </button>
+</div>
+
+<div class="toast" id="toast"><span>Note deleted</span><button id="undoBtn">Undo</button></div>
+
+<script>
+(()=>{const STORAGE_KEY='postit-notes-v1';
+const stage=document.getElementById('stage'),marquee=document.getElementById('marquee'),
+toolbox=document.getElementById('toolbox'),toast=document.getElementById('toast'),
+undoBtn=document.getElementById('undoBtn');
+let zTop=1,selection=new Set(),activeNote=null,lastDeleted=null;
+let suppressNextStageClick=false;
+
+/* ===== Selection-based font-size change ===== */
+function changeSelectedFontSize(delta){
+  const sel=window.getSelection();
+  if(!sel || !sel.rangeCount) return false;
+  const range=sel.getRangeAt(0);
+  if(range.collapsed) return false;
+
+  const container = range.startContainer.nodeType===1 ? range.startContainer : range.startContainer.parentElement;
+  const base = parseFloat(window.getComputedStyle(container).fontSize)||14;
+  const span=document.createElement('span');
+  span.style.fontSize = Math.max(10, base + delta) + 'px';
+
+  const frag=range.extractContents();
+  span.appendChild(frag);
+  range.insertNode(span);
+
+  sel.removeAllRanges();
+  const newRange=document.createRange();
+  newRange.selectNodeContents(span);
+  sel.addRange(newRange);
+  return true;
+}
+
+/* ===== Edit helpers ===== */
+function enterEdit(note){
+  if(!note) return;
+  const content=note.querySelector('.note-content');
+  note.dataset.editing='1';
+  content.contentEditable='true';
+  content.focus();
+}
+function exitEdit(note){
+  if(!note) return;
+  const content=note.querySelector('.note-content');
+  delete note.dataset.editing;
+  content.contentEditable='false';
+}
+
+/* ===== Stage click: deselect vs create ===== */
+stage.addEventListener('click',e=>{
+ if(e.target!==stage) return;
+ if(suppressNextStageClick){suppressNextStageClick=false;return;}
+ const anySelected = selection.size>0;
+ const anyEditing  = document.querySelector('.note[data-editing="1"]') !== null;
+ if(anySelected || anyEditing){
+   document.querySelectorAll('.note[data-editing="1"]').forEach(exitEdit);
+   clearSel();
+   return; // no new note
+ }
+ const n=createNote({x:e.clientX-12,y:e.clientY-12});
+ setActive(n); save();
+});
+
+/* ===== Create / restore ===== */
+function createNote(o={}){const n=document.createElement('div');
+ n.className='note';
+ n.dataset.id=o.id||Date.now()+'-'+Math.random().toString(36).slice(2);
+ n.style.left=(o.x??100)+'px';n.style.top=(o.y??120)+'px';
+ if(o.width!=null)n.style.width=o.width+'px';  /* restore exact saved sizes */
+ if(o.height!=null)n.style.height=o.height+'px';
+ n.style.background=o.color||'#fff88b';
+ n.style.fontSize=(o.fontSize||14)+'px';
+ n.style.zIndex=++zTop;
+
+ const header=document.createElement('div');header.className='note-header';n.appendChild(header);
+
+ const content=document.createElement('div');
+ content.className='note-content';
+ content.contentEditable='false';
+ content.innerHTML=o.html||'';
+ n.appendChild(content);
+
+ const rh=document.createElement('div');rh.className='resize-handle';n.appendChild(rh);
+
+ enableMoveDrag(n, header);
+ enableResize(n,rh);
+ persist(n,content);
+
+ content.addEventListener('mousedown',ev=>{
+   if(!selection.has(n)){ clearSel(); addSel(n); }
+   setActive(n,true);
+   if(n.dataset.editing!=='1') enterEdit(n);
+ });
+
+ header.addEventListener('click',ev=>{
+   ev.stopPropagation();
+   if(!selection.has(n)){ clearSel(); addSel(n); }
+   setActive(n,true);
+ });
+
+ // Near-corner hover detection (for unselected)
+ n.addEventListener('mousemove', (ev) => {
+   const r = n.getBoundingClientRect();
+   const distX = r.right - ev.clientX;
+   const distY = r.bottom - ev.clientY;
+   const NEAR = 18;
+   if (distX >= 0 && distY >= 0 && distX <= NEAR && distY <= NEAR) {
+     n.classList.add('show-resize');
+   } else {
+     n.classList.remove('show-resize');
+   }
+ });
+ n.addEventListener('mouseleave', () => n.classList.remove('show-resize'));
+
+ stage.appendChild(n);
+ if('ResizeObserver'in window)new ResizeObserver(save).observe(n);
+ return n;
+}
+
+function setActive(n,keep=false){
+  activeNote=n; n.style.zIndex=++zTop;
+  if(!keep){ clearSel(); addSel(n); }
+  updateTools();
+}
+const addSel=n=>{selection.add(n);n.classList.add('selected');updateTools();};
+const remSel=n=>{selection.delete(n);n.classList.remove('selected');updateTools();};
+const clearSel=()=>{selection.forEach(n=>n.classList.remove('selected'));selection.clear();updateTools();};
+
+/* ===== Marquee select ===== */
+let start=null,moved=false;
+const THRESHOLD=3;
+stage.addEventListener('mousedown',e=>{
+ if(e.target!==stage) return;
+ start={x:e.clientX,y:e.clientY};moved=false;
+ marquee.style.left=start.x+'px';marquee.style.top=start.y+'px';
+ marquee.style.width='0';marquee.style.height='0';marquee.style.display='block';
+ clearSel();
+});
+document.addEventListener('mousemove',e=>{
+ if(!start) return;
+ const dx=e.clientX-start.x,dy=e.clientY-start.y;
+ if(Math.abs(dx)>THRESHOLD||Math.abs(dy)>THRESHOLD) moved=true;
+ const x1=Math.min(start.x,e.clientX),y1=Math.min(start.y,e.clientY),
+       x2=Math.max(start.x,e.clientX),y2=Math.max(start.y,e.clientY);
+ marquee.style.left=x1+'px';marquee.style.top=y1+'px';
+ marquee.style.width=(x2-x1)+'px';marquee.style.height=(y2-y1)+'px';
+ document.querySelectorAll('.note').forEach(n=>{
+  const r=n.getBoundingClientRect();
+  const hit=!(r.right<x1||r.left>x2||r.bottom<y1||r.top>y2);
+  hit?addSel(n):remSel(n);
+ });
+});
+document.addEventListener('mouseup',()=>{
+ if(!start) return;
+ marquee.style.display='none';start=null;
+ if(moved){suppressNextStageClick=true;moved=false;}
+});
+
+/* ===== Move by header drag ===== */
+function enableMoveDrag(note, header){
+ let down=false,drag=false,sx=0,sy=0,offX=0,offY=0;
+
+ header.addEventListener('mousedown',ev=>{
+  exitEdit(note);
+  if(!selection.has(note)) { clearSel(); addSel(note); }
+  setActive(note,true);
+
+  const r=note.getBoundingClientRect();
+  offX=ev.clientX - r.left;
+  offY=ev.clientY - r.top;
+
+  down=true;drag=false;sx=ev.clientX;sy=ev.clientY;
+  ev.preventDefault();
+ });
+
+ document.addEventListener('mousemove',ev=>{
+  if(!down) return;
+  if(!drag){
+    if(Math.abs(ev.clientX-sx)>5||Math.abs(ev.clientY-sy)>5){
+      drag=true; window.getSelection()?.removeAllRanges?.();
+    } else return;
+  }
+  selection.forEach(nn=>{
+    const rr=nn.getBoundingClientRect();
+    if(nn===note){
+      nn.style.left=(ev.clientX - offX)+'px';
+      nn.style.top =(ev.clientY - offY)+'px';
+    } else {
+      const dx=ev.movementX|| (ev.clientX - sx);
+      const dy=ev.movementY|| (ev.clientY - sy);
+      nn.style.left=(rr.left + dx)+'px';
+      nn.style.top =(rr.top  + dy)+'px';
+    }
+    nn.style.zIndex=++zTop;
+  });
+  sx=ev.clientX; sy=ev.clientY;
+ });
+
+ document.addEventListener('mouseup',()=>{
+  if(!down) return;
+  down=false; if(drag){drag=false; save();}
+ });
+}
+
+/* ===== Resize ===== */
+function enableResize(n,h){
+ let down=false,l=0,t=0;
+ h.addEventListener('mousedown',ev=>{
+  ev.stopPropagation();down=true;
+  const r=n.getBoundingClientRect();l=r.left;t=r.top;
+  if(!selection.has(n)){clearSel();addSel(n);}setActive(n,true);
+  exitEdit(n);
+  window.getSelection()?.removeAllRanges?.();
+ });
+ document.addEventListener('mousemove',ev=>{
+  if(!down) return;
+  n.style.width =Math.max(140,Math.round(ev.clientX-l))+'px';
+  n.style.height=Math.max(120,Math.round(ev.clientY-t))+'px';
+ });
+ document.addEventListener('mouseup',()=>{
+  if(!down) return; down=false; save();
+ });
+}
+
+/* ===== Toolbox ===== */
+const smaller=document.getElementById('smaller'),
+      larger =document.getElementById('larger'),
+      trash  =document.getElementById('trash'),
+      exportBtn=document.getElementById('export');
+
+function apply(fn){ if(!selection.size) return; selection.forEach(fn); save(); }
+
+smaller.onclick=e=>{
+ e.stopPropagation();
+ const editing=document.querySelector('.note[data-editing="1"]');
+ if(editing && window.getSelection()?.toString()?.length){
+   if(changeSelectedFontSize(-2)) save();
+ }else{
+   apply(n=>{const s=parseFloat(getComputedStyle(n).fontSize)||14;n.style.fontSize=Math.max(10,s-2)+'px';});
+ }
+};
+larger.onclick=e=>{
+ e.stopPropagation();
+ const editing=document.querySelector('.note[data-editing="1"]');
+ if(editing && window.getSelection()?.toString()?.length){
+   if(changeSelectedFontSize(2)) save();
+ }else{
+   apply(n=>{const s=parseFloat(getComputedStyle(n).fontSize)||14;n.style.fontSize=Math.min(40,s+2)+'px';});
+ }
+};
+
+document.querySelectorAll('.swatch').forEach(s=>{
+ s.onclick=e=>{
+  e.stopPropagation();
+  apply(n=>n.style.background=s.dataset.color);
+  document.querySelectorAll('.swatch').forEach(x=>x.classList.remove('selected'));
+  s.classList.add('selected');
+ };
+});
+
+/* Export (left) */
+exportBtn.onclick=e=>{
+ e.stopPropagation();
+ const texts=Array.from(stage.querySelectorAll('.note'))
+   .map(n=>(n.querySelector('.note-content').innerText||'').trim())
+   .filter(t=>t.length>0);
+ const blob=new Blob([texts.join('\n\n')],{type:'text/plain'});
+ const a=document.createElement('a');const ts=new Date().toISOString().replace(/[:.]/g,'-');
+ a.href=URL.createObjectURL(blob);a.download=`postit-notes-${ts}.txt`;a.click();
+};
+
+/* Delete (right) */
+trash.onclick=e=>{e.stopPropagation();delSel();};
+
+/* Cmd+Z → Undo delete */
+document.addEventListener('keydown',e=>{
+ if(e.metaKey&&!e.shiftKey&&e.key.toLowerCase()==='z'&&lastDeleted){
+   e.preventDefault();undo();
+ }
+});
+
+function updateTools(){
+ const s=selection.size>0;
+ [smaller,larger,trash].forEach(b=>b.disabled=!s);
+ document.querySelectorAll('.swatch').forEach(s2=>s2.disabled=!s);
+}
+
+/* ===== Persistence ===== */
+/* Round CSS width/height to integers to avoid sub-pixel drift */
+function cssNumber(el, prop){
+  const v = parseFloat(getComputedStyle(el)[prop]);
+  return Number.isFinite(v) ? Math.round(v) : undefined;
+}
+const ser=n=>{
+ const r=n.getBoundingClientRect();
+ const w = parseFloat(n.style.width);  // prefer explicit css width
+ const h = parseFloat(n.style.height);
+ return {
+  id:n.dataset.id,
+  x:parseFloat(n.style.left)||Math.round(r.left),
+  y:parseFloat(n.style.top)||Math.round(r.top),
+  width:Number.isFinite(w)?Math.round(w):cssNumber(n,'width'),
+  height:Number.isFinite(h)?Math.round(h):cssNumber(n,'height'),
+  color:n.style.background||getComputedStyle(n).backgroundColor,
+  fontSize:parseFloat(getComputedStyle(n).fontSize)||14,
+  html:n.querySelector('.note-content').innerHTML,
+  z:parseInt(n.style.zIndex||'1',10)
+ };
+};
+function save(){
+  const payload={zTop,notes:Array.from(stage.querySelectorAll('.note')).map(ser)};
+  localStorage.setItem(STORAGE_KEY,JSON.stringify(payload));
+}
+function restore(){
+  const raw=localStorage.getItem(STORAGE_KEY); if(!raw) return;
+  try{
+    const d=JSON.parse(raw);
+    zTop=d?.zTop||1;
+    (d?.notes||[]).forEach(n=>createNote(n));
+  }catch{}
+  updateTools();
+}
+function persist(n,c){c.addEventListener('input',save);c.addEventListener('blur',save);}
+
+/* ===== Delete / Undo ===== */
+function showToast(){
+ toast.classList.add('show');
+ if(lastDeleted?.timer) clearTimeout(lastDeleted.timer);
+ lastDeleted.timer=setTimeout(()=>{toast.classList.remove('show');lastDeleted=null;},5000);
+}
+function delSel(){
+ selection.forEach(exitEdit);
+ if(!selection.size&&activeNote) addSel(activeNote);
+ if(!selection.size) return;
+ const data=Array.from(selection).map(ser);
+ Array.from(selection).forEach(n=>n.remove());
+ clearSel();activeNote=null;updateTools();save();
+ lastDeleted={list:data,timer:null};showToast();
+}
+function undo(){
+ if(!lastDeleted) return;
+ toast.classList.remove('show');clearTimeout(lastDeleted.timer);
+ const restored=lastDeleted.list.map(d=>createNote(d));
+ clearSel();restored.forEach(addSel);
+ if(restored[0]) setActive(restored[0],true);
+ save();lastDeleted=null;
+}
+undoBtn.onclick=e=>{e.stopPropagation();undo();};
+
+/* Keep clicks on UI elements from creating notes */
+toolbox.addEventListener('click',e=>e.stopPropagation());
+toast.addEventListener('click',e=>e.stopPropagation());
+
+/* Init */
+restore();
+})();
+</script>
+</body>
+</html>
